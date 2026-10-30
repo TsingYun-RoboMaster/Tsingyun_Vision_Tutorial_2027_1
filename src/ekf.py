@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import config
+from . import config, utils
 from .beam_model import BeamParams
+from .motion_models import sample_velocity_motion_model
 from .utils import make_rng, wrap_angle
 
 
@@ -90,7 +91,33 @@ def ekf_predict(mu, Sigma, u_t, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
     # 9:  Sigma_bar = G*Sigma*G^T + V*M*V^T
     # 10: return (mu_bar, Sigma_bar)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 4.1: ekf_predict (Table 7.2, lines 2-4)")
+    mu = np.asarray(mu, dtype=float)
+    Sigma = np.asarray(Sigma, dtype=float)
+
+    mu_bar = np.asarray(sample_velocity_motion_model(u_t, mu, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), dt), dtype=float)
+    w_safe = w if abs(w) > 1e-4 else (1e-4 if w >= 0.0 else -1e-4)
+    r = v / w_safe
+
+    th = float(mu[2])
+    s, c = np.sin(th), np.cos(th)
+    sp, cp = np.sin(th + w_safe * dt), np.cos(th + w_safe * dt)
+    G = np.array([
+        [1.0, 0.0, -r * c + r * cp],
+        [0.0, 1.0, -r * s + r * sp],
+        [0.0, 0.0, 1.0],
+    ])
+    V = np.array([
+        [(-s + sp) / w_safe, v * (s - sp) / (w_safe ** 2) + v * cp * dt / w_safe, 0],
+        [(c - cp) / w_safe, v * (c - cp) / (w_safe ** 2) + v * sp * dt / w_safe, 0],
+        [0, dt, dt],
+    ])
+    M = np.diag([
+        a1 * abs(v) + a2 * abs(w),
+        a3 * abs(v) + a4 * abs(w),
+        a5 * abs(v) + a6 * abs(w),
+    ])
+    Sigma_bar = G @ Sigma @ G.T + V @ M @ V.T
+    return mu_bar, Sigma_bar
 
 
 def ekf_correct(mu_bar, Sigma_bar, residual, H, R):
@@ -126,7 +153,18 @@ def ekf_correct(mu_bar, Sigma_bar, residual, H, R):
     # 4: Sigma = (I - K*H)*Sigma_bar
     # 5: return (mu, Sigma)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 4.2: ekf_correct (Table 7.2, lines 12-15)")
+    mu_bar = np.asarray(mu_bar, dtype=float)
+    Sigma_bar = np.asarray(Sigma_bar, dtype=float)
+    residual = np.asarray(residual, dtype=float)
+    H = np.asarray(H, dtype=float)
+    R = np.asarray(R, dtype=float)
+
+    S = H @ Sigma_bar @ H.T + R
+    K = Sigma_bar @ H.T @ np.linalg.inv(S)
+    mu = mu_bar + K @ residual
+    mu[2] = wrap_angle(mu[2])
+    Sigma = (np.eye(3) - K @ H) @ Sigma_bar
+    return mu, Sigma
 
 
 # ==========================================================================
@@ -167,8 +205,8 @@ def beam_update_terms(world, pose_bar, scan, beam_angles, params=None):
         return world.raycast([[p[0], p[1]]], p[2] + ang, params.z_max_range)[0]
 
     zs = z_star(pose_bar)
-    good = zs < params.z_max_range - 1e-6          # no prediction for misses
-    good &= np.abs(z - zs) < ec.beam_gate          # outlier gating
+    good = zs < params.z_max_range - 1e-6  # no prediction for misses
+    good &= np.abs(z - zs) < ec.beam_gate  # outlier gating
     if good.sum() < 6:
         return None
 
@@ -217,9 +255,9 @@ def likelihood_field_update_terms(world, pose_bar, scan, beam_angles, params=Non
     if good.sum() < 6:
         return None
 
-    residual = -h0[good]                            # target 0 minus h(mu_bar)
+    residual = -h0[good]  # target 0 minus h(mu_bar)
     H = _numeric_pose_jacobian(h, pose_bar)[good]
-    R = np.diag(np.full(int(good.sum()), params.sigma_hit**2 + 0.02))
+    R = np.diag(np.full(int(good.sum()), params.sigma_hit ** 2 + 0.02))
     info = {"kind": "endpoints", "angles": ang[good], "z": z[good]}
     return residual, H, R, info
 
@@ -262,7 +300,7 @@ class EKFLocalizer:
         self.mu = (np.asarray(init_pose, dtype=float)
                    + rng.normal(0.0, std * 0.5))
         self.mu[2] = wrap_angle(self.mu[2])
-        self.Sigma = np.diag(std**2)
+        self.Sigma = np.diag(std ** 2)
         self.update_ms_total = 0.0
         self.update_count = 0
         self.last_update_info = None
