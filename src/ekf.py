@@ -95,7 +95,8 @@ def ekf_predict(mu, Sigma, u_t, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
     Sigma = np.asarray(Sigma, dtype=float)
 
     mu_bar = np.asarray(sample_velocity_motion_model(u_t, mu, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), dt), dtype=float)
-    w_safe = w if abs(w) > 1e-4 else (1e-4 if w >= 0.0 else -1e-4)
+    eps = 1e-3
+    w_safe = w if abs(w) > eps else (eps if w >= 0.0 else -eps)
     r = v / w_safe
 
     th = float(mu[2])

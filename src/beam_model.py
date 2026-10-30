@@ -44,11 +44,11 @@ class BeamParams:
 
     z_hit: float = 0.72
     z_short: float = 0.10
-    z_max: float = 0.05        # mixture weight of the failure component
+    z_max: float = 0.05  # mixture weight of the failure component
     z_rand: float = 0.13
-    sigma_hit: float = 0.06    # meters
+    sigma_hit: float = 0.06  # meters
     lambda_short: float = 0.28  # 1/meters
-    z_max_range: float = 8.0   # meters, the sensor's maximum range
+    z_max_range: float = 8.0  # meters, the sensor's maximum range
 
     @classmethod
     def from_laser(cls, laser=config.LASER):
@@ -97,8 +97,8 @@ def p_hit_density(z, z_star, params):
     sigma = float(params.sigma_hit)
     z_max = float(params.z_max_range)
 
-    eta = 1 / ( gaussian_cdf((z_max - z_star)/sigma) - gaussian_cdf((0 - z_star)/sigma) )   # eq. 6.6
-    p = eta * (1/(sigma * np.sqrt(2 * np.pi))) * np.exp( -(z - z_star)**2 / (2 * sigma ** 2) )
+    eta = 1 / (gaussian_cdf((z_max - z_star) / sigma) - gaussian_cdf((0 - z_star) / sigma))  # eq. 6.6
+    p = eta * (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-(z - z_star) ** 2 / (2 * sigma ** 2))
     return np.where((z >= 0.0) & (z <= z_max), p, 0)
 
 
@@ -310,7 +310,7 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         z_short = np.sum(e_short) / n
         z_max = np.sum(e_max) / n
         z_rand = np.sum(e_rand) / n
-        sigma = np.sqrt(np.sum (e_hit * (z - z_star) ** 2) / np.sum(e_hit))
+        sigma = np.sqrt(np.sum(e_hit * (z - z_star) ** 2) / np.sum(e_hit))
         lambda_short = solve_lambda_short(e_short, z, z_star)
         params = BeamParams(z_hit, z_short, z_max, z_rand, sigma, lambda_short, params.z_max_range)
 

@@ -39,8 +39,8 @@ from .utils import prob_normal, sample_normal, wrap_angle
 # ==========================================================================
 
 # util function wrap
-def _wrap(alpha):
-    return alpha - 2 * np.pi * np.floor((alpha + np.pi) / (2 * np.pi))
+# def wrap_angle(alpha):
+#     return alpha - 2 * np.pi * np.floor((alpha + np.pi) / (2 * np.pi))
 
 
 # util function dist
@@ -137,7 +137,7 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
     d_theta = np.atan2(yp - y_star, xp - x_star) - np.atan2(y - y_star, x - x_star)
     v_hat = d_theta * r_star / dt  # eq. 5.24
     w_hat = d_theta / dt
-    gamma_hat = _wrap(thp - th) / dt - w_hat  # eq. 5.25
+    gamma_hat = wrap_angle(thp - th) / dt - w_hat  # eq. 5.25
 
     straight = (np.abs(den) < 1e-6) & ((np.abs(xp - x) > 1e-6) | (np.abs(yp - y) > 1e-6))
     in_place = (np.abs(xp - x) < 1e-6) & (np.abs(yp - y) < 1e-6)
@@ -146,10 +146,10 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
                      np.sign((xp - x) * np.cos(th) + (yp - y) * np.sin(th)) * _dist((x, y), (xp, yp)) / dt,
                      v_hat)
     w_hat = np.where(straight, 0, w_hat)
-    gamma_hat = np.where(straight, _wrap(thp - th) / dt, gamma_hat)
+    gamma_hat = np.where(straight, wrap_angle(thp - th) / dt, gamma_hat)
 
     v_hat = np.where(in_place, 0, v_hat)
-    w_hat = np.where(in_place, _wrap(thp - th) / dt, w_hat)
+    w_hat = np.where(in_place, wrap_angle(thp - th) / dt, w_hat)
     gamma_hat = np.where(in_place, 0, gamma_hat)
 
     return (prob_normal(v - v_hat, a1 * np.abs(v) + a2 * np.abs(w))
@@ -280,15 +280,15 @@ def odometry_motion_model(x_t, u_t, x_prev, alphas=config.ODOMETRY_ALPHAS):
     # 9:  p3 = prob_normal(wrap(rot2 - rot2_hat),   a1·|rot2_hat| + a2·trans_hat)
     # 10: return p1 · p2 · p3
     # ------------------------------------------------------------------
-    rot1 = _wrap(np.atan2(ybp - yb, xbp - xb) - thb)
+    rot1 = wrap_angle(np.atan2(ybp - yb, xbp - xb) - thb)
     trans = np.sqrt((xb - xbp) ** 2 + (yb - ybp) ** 2)
-    rot2 = _wrap(thbp - thb - rot1)
-    rot1_hat = _wrap(np.atan2(yp - y, xp - x) - th)
+    rot2 = wrap_angle(thbp - thb - rot1)
+    rot1_hat = wrap_angle(np.atan2(yp - y, xp - x) - th)
     trans_hat = _dist((x, y), (xp, yp))
-    rot2_hat = _wrap(thp - th - rot1_hat)
-    p1 = prob_normal(_wrap(rot1 - rot1_hat), a1 * np.abs(rot1_hat) + a2 * trans_hat)
-    p2 = prob_normal(_wrap(trans - trans_hat), a3 * trans_hat + a4 * (np.abs(rot1_hat) + np.abs(rot2_hat)))
-    p3 = prob_normal(_wrap(rot2 - rot2_hat), a1 * np.abs(rot2_hat) + a2 * trans_hat)
+    rot2_hat = wrap_angle(thp - th - rot1_hat)
+    p1 = prob_normal(wrap_angle(rot1 - rot1_hat), a1 * np.abs(rot1_hat) + a2 * trans_hat)
+    p2 = prob_normal(wrap_angle(trans - trans_hat), a3 * trans_hat + a4 * (np.abs(rot1_hat) + np.abs(rot2_hat)))
+    p3 = prob_normal(wrap_angle(rot2 - rot2_hat), a1 * np.abs(rot2_hat) + a2 * trans_hat)
     return p1 * p2 * p3
 
 
@@ -339,12 +339,12 @@ def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng
     # 9:  thp = th + rot1_hat + rot2_hat
     # 10: return (xp, yp, thp) per input pose
     # ------------------------------------------------------------------
-    rot1 = _wrap(np.atan2(ybp - yb, xbp - xb) - thb)
+    rot1 = wrap_angle(np.atan2(ybp - yb, xbp - xb) - thb)
     trans = _dist((xb, yb), (xbp, ybp))
-    rot2 = _wrap(thbp - thb - rot1)
-    rot1_hat = _wrap(rot1 - sample_normal((a1 * np.abs(rot1) + a2 * trans) * np.ones_like(x), rng))
+    rot2 = wrap_angle(thbp - thb - rot1)
+    rot1_hat = rot1 - sample_normal((a1 * np.abs(rot1) + a2 * trans) * np.ones_like(x), rng)
     trans_hat = trans - sample_normal((a3 * trans + a4 * (np.abs(rot1) + np.abs(rot2))) * np.ones_like(x), rng)
-    rot2_hat = _wrap(rot2 - sample_normal((a1 * np.abs(rot2) + a2 * trans) * np.ones_like(x), rng))
+    rot2_hat = rot2 - sample_normal((a1 * np.abs(rot2) + a2 * trans) * np.ones_like(x), rng)
     xp = x + trans_hat * np.cos(th + rot1_hat)
     yp = y + trans_hat * np.sin(th + rot1_hat)
     thp = th + rot1_hat + rot2_hat
