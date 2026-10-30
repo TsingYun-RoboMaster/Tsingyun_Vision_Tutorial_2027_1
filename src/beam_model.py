@@ -44,11 +44,11 @@ class BeamParams:
 
     z_hit: float = 0.72
     z_short: float = 0.10
-    z_max: float = 0.05        # mixture weight of the failure component
+    z_max: float = 0.05  # mixture weight of the failure component
     z_rand: float = 0.13
-    sigma_hit: float = 0.06    # meters
+    sigma_hit: float = 0.06  # meters
     lambda_short: float = 0.28  # 1/meters
-    z_max_range: float = 8.0   # meters, the sensor's maximum range
+    z_max_range: float = 8.0  # meters, the sensor's maximum range
 
     @classmethod
     def from_laser(cls, laser=config.LASER):
@@ -91,7 +91,15 @@ def p_hit_density(z, z_star, params):
     # 2: p = eta · (1/(sigma·√(2π))) · exp( -(z - z*)² / (2·sigma²) )
     # 3: return p where 0 ≤ z ≤ z_max, else 0                         # eq. 6.4
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_hit_density (eq. 6.4-6.6)")
+
+    z = np.asarray(z, dtype=np.float64)
+    z_star = np.asarray(z_star, dtype=np.float64)
+    sigma = float(params.sigma_hit)
+    z_max = float(params.z_max_range)
+
+    eta = 1 / (gaussian_cdf((z_max - z_star) / sigma) - gaussian_cdf((0 - z_star) / sigma))  # eq. 6.6
+    p = eta * (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-(z - z_star) ** 2 / (2 * sigma ** 2))
+    return np.where((z >= 0.0) & (z <= z_max), p, 0)
 
 
 def p_short_density(z, z_star, params):
@@ -113,7 +121,13 @@ def p_short_density(z, z_star, params):
     # 3: return p where 0 ≤ z ≤ z*, else 0                            # eq. 6.7
     # 4: if z* ≤ 0, return 0 everywhere (no truncation interval)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_short_density (eq. 6.7-6.10)")
+    z = np.asarray(z, dtype=np.float64)
+    z_star = np.asarray(z_star, dtype=np.float64)
+    lam = float(params.lambda_short)
+
+    eta = 1 / (1 - np.exp(-lam * z_star))
+    p = eta * lam * np.exp(- lam * z)
+    return np.where((z_star > 0.0) & (z >= 0.0) & (z <= z_star), p, 0.0)
 
 
 def p_max_density(z, params):
@@ -123,7 +137,9 @@ def p_max_density(z, params):
     # Return one where the measurement equals the maximum range exactly
     # (compare with a tiny absolute tolerance), zero elsewhere.
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_max_density (eq. 6.11)")
+    z = np.asarray(z, dtype=np.float64)
+    z_max = float(params.z_max_range)
+    return np.where(np.abs(z - z_max) < 1e-9, 1.0, 0.0)
 
 
 def p_rand_density(z, params):
@@ -133,7 +149,9 @@ def p_rand_density(z, params):
     # Return one over z_max where the measurement lies inside [0, z_max),
     # zero at z_max and beyond.
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_rand_density (eq. 6.12)")
+    z = np.asarray(z, dtype=np.float64)
+    z_max = float(params.z_max_range)
+    return np.where((z >= 0.0) & (z < z_max), 1.0 / z_max, 0.0)
 
 
 def p_beam(z, z_star, params):
@@ -153,7 +171,12 @@ def p_beam(z, z_star, params):
     # 1: return z_hit·p_hit(z, z*) + z_short·p_short(z, z*)
     #          + z_max·p_max(z)      + z_rand·p_rand(z)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_beam (Table 6.1, eq. 6.13)")
+    z = np.asarray(z, dtype=np.float64)
+    z_star = np.asarray(z_star, dtype=np.float64)
+    return (params.z_hit * p_hit_density(z, z_star, params)
+            + params.z_short * p_short_density(z, z_star, params)
+            + params.z_max * p_max_density(z, params)
+            + params.z_rand * p_rand_density(z, params))
 
 
 def beam_range_finder_model(scan, z_star, params):
@@ -246,7 +269,16 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         #    e_short = z_short·d_short / total           # each mechanism for
         #    e_max   = z_max·d_max   / total             # each measurement
         #    e_rand  = z_rand·d_rand  / total
-        e_hit = e_short = e_max = e_rand = None  # TODO: replace
+        d_hit = p_hit_density(z, z_star, params)  # the four component
+        d_short = p_short_density(z, z_star, params)  # densities under the
+        d_max = p_max_density(z, params)  # CURRENT parameters
+        d_rand = p_rand_density(z, params)
+        total = params.z_hit * d_hit + params.z_short * d_short + params.z_max * d_max + params.z_rand * d_rand
+        total = np.maximum(total, np.finfo(float).tiny)  # guard the division
+        e_hit = params.z_hit * d_hit / total  # responsibility of
+        e_short = params.z_short * d_short / total  # each mechanism for
+        e_max = params.z_max * d_max / total  # each measurement
+        e_rand = params.z_rand * d_rand / total
 
         # ---- M-step (TODO 2.2b): parameter updates, eq. 6.30-6.32 -----
         # TODO: re-estimate all six intrinsic parameters from the
@@ -273,7 +305,14 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         # 4: lambda = solve_lambda_short(e_short, z, z_star)   # exact, provided
         # 5: params = BeamParams(z_hit, z_short, z_max, z_rand, sigma,
         #                        lambda, params.z_max_range)
-        raise NotImplementedError("task 2.2: EM step of learn_intrinsic_parameters")
+        n = z.size
+        z_hit = np.sum(e_hit) / n
+        z_short = np.sum(e_short) / n
+        z_max = np.sum(e_max) / n
+        z_rand = np.sum(e_rand) / n
+        sigma = np.sqrt(np.sum(e_hit * (z - z_star) ** 2) / np.sum(e_hit))
+        lambda_short = solve_lambda_short(e_short, z, z_star)
+        params = BeamParams(z_hit, z_short, z_max, z_rand, sigma, lambda_short, params.z_max_range)
 
         ll = float(np.sum(np.log(p_beam(z, z_star, params))))
         history["loglik"].append(ll)

@@ -38,6 +38,15 @@ from .utils import prob_normal, sample_normal, wrap_angle
 # Velocity motion model
 # ==========================================================================
 
+# util function wrap
+# def wrap_angle(alpha):
+#     return alpha - 2 * np.pi * np.floor((alpha + np.pi) / (2 * np.pi))
+
+
+# util function dist
+def _dist(x, y):
+    return np.sqrt((x[0] - y[0]) ** 2 + (x[1] - y[1]) ** 2)
+
 
 def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
     """Probability p(x_t | u_t, x_{t-1}) under the velocity motion model.
@@ -119,7 +128,34 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
     #          · prob_normal(w - w_hat, a3·|v| + a4·|w|)
     #          · prob_normal(gamma_hat, a5·|v| + a6·|w|)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.1: velocity_motion_model (Table 5.1)")
+    num = (x - xp) * np.cos(th) + (y - yp) * np.sin(th)
+    den = (y - yp) * np.cos(th) - (x - xp) * np.sin(th)
+    den = np.where(np.abs(den) < 1e-12, 1e-12, den)
+    mu = 0.5 * num / den  # eq. 5.18
+    x_star = (x + xp) / 2 + mu * (y - yp)  # eq. 5.19: arc center
+    y_star = (y + yp) / 2 + mu * (xp - x)
+    r_star = _dist((x, y), (x_star, y_star))  # eq. 5.20: radius
+    d_theta = np.atan2(yp - y_star, xp - x_star) - np.atan2(y - y_star, x - x_star)
+    v_hat = d_theta * r_star / dt  # eq. 5.24
+    w_hat = d_theta / dt
+    gamma_hat = wrap_angle(thp - th) / dt - w_hat  # eq. 5.25
+
+    straight = (np.abs(den) < 1e-6) & ((np.abs(xp - x) > 1e-6) | (np.abs(yp - y) > 1e-6))
+    in_place = (np.abs(xp - x) < 1e-6) & (np.abs(yp - y) < 1e-6)
+
+    v_hat = np.where(straight,
+                     np.sign((xp - x) * np.cos(th) + (yp - y) * np.sin(th)) * _dist((x, y), (xp, yp)) / dt,
+                     v_hat)
+    w_hat = np.where(straight, 0, w_hat)
+    gamma_hat = np.where(straight, wrap_angle(thp - th) / dt, gamma_hat)
+
+    v_hat = np.where(in_place, 0, v_hat)
+    w_hat = np.where(in_place, wrap_angle(thp - th) / dt, w_hat)
+    gamma_hat = np.where(in_place, 0, gamma_hat)
+
+    return (prob_normal(v - v_hat, a1 * np.abs(v) + a2 * np.abs(w))
+            * prob_normal(w - w_hat, a3 * np.abs(v) + a4 * np.abs(w))
+            * prob_normal(gamma_hat, a5 * np.abs(v) + a6 * np.abs(w)))
 
 
 def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=config.DT, rng=None):
@@ -172,7 +208,21 @@ def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=
     # 11: thp = th + w_hat·dt + gamma_hat·dt              # extra final rotation
     # 12: return (xp, yp, thp) per input pose
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.2: sample_velocity_motion_model (Table 5.3)")
+    v_hat = v + sample_normal((a1 * np.abs(v) + a2 * np.abs(w)) * np.ones_like(x), rng)  # one draw per particle
+    w_hat = w + sample_normal((a3 * np.abs(v) + a4 * np.abs(w)) * np.ones_like(x), rng)
+    gamma_hat = sample_normal((a5 * np.abs(v) + a6 * np.abs(w)) * np.ones_like(x), rng)
+
+    straight = np.abs(w_hat) < 1e-6
+    r = np.where(straight, 1.0, v_hat / np.where(straight, 1.0, w_hat))  # turning radius
+    xp = x - r * np.sin(th) + r * np.sin(th + w_hat * dt)
+    yp = y + r * np.cos(th) - r * np.cos(th + w_hat * dt)
+
+    xp = np.where(straight, x + v_hat * dt * np.cos(th), xp)
+    yp = np.where(straight, y + v_hat * dt * np.sin(th), yp)
+
+    thp = th + w_hat * dt + gamma_hat * dt  # extra final rotation
+    poses = np.stack([xp, yp, thp], axis=1)
+    return poses[0] if single else poses
 
 
 # ==========================================================================
@@ -231,7 +281,16 @@ def odometry_motion_model(x_t, u_t, x_prev, alphas=config.ODOMETRY_ALPHAS):
     # 9:  p3 = prob_normal(wrap(rot2 - rot2_hat),   a1·|rot2_hat| + a2·trans_hat)
     # 10: return p1 · p2 · p3
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.3: odometry_motion_model (Table 5.5)")
+    rot1 = wrap_angle(np.atan2(ybp - yb, xbp - xb) - thb)
+    trans = np.sqrt((xb - xbp) ** 2 + (yb - ybp) ** 2)
+    rot2 = wrap_angle(thbp - thb - rot1)
+    rot1_hat = wrap_angle(np.atan2(yp - y, xp - x) - th)
+    trans_hat = _dist((x, y), (xp, yp))
+    rot2_hat = wrap_angle(thp - th - rot1_hat)
+    p1 = prob_normal(wrap_angle(rot1 - rot1_hat), a1 * np.abs(rot1_hat) + a2 * trans_hat)
+    p2 = prob_normal(wrap_angle(trans - trans_hat), a3 * trans_hat + a4 * (np.abs(rot1_hat) + np.abs(rot2_hat)))
+    p3 = prob_normal(wrap_angle(rot2 - rot2_hat), a1 * np.abs(rot2_hat) + a2 * trans_hat)
+    return p1 * p2 * p3
 
 
 def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng=None):
@@ -281,7 +340,18 @@ def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng
     # 9:  thp = th + rot1_hat + rot2_hat
     # 10: return (xp, yp, thp) per input pose
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.4: sample_odometry_motion_model (Table 5.6)")
+    rot1 = wrap_angle(np.atan2(ybp - yb, xbp - xb) - thb)
+    trans = _dist((xb, yb), (xbp, ybp))
+    rot2 = wrap_angle(thbp - thb - rot1)
+    rot1_hat = rot1 - sample_normal((a1 * np.abs(rot1) + a2 * trans) * np.ones_like(x), rng)
+    trans_hat = trans - sample_normal((a3 * trans + a4 * (np.abs(rot1) + np.abs(rot2))) * np.ones_like(x), rng)
+    rot2_hat = rot2 - sample_normal((a1 * np.abs(rot2) + a2 * trans) * np.ones_like(x), rng)
+    xp = x + trans_hat * np.cos(th + rot1_hat)
+    yp = y + trans_hat * np.sin(th + rot1_hat)
+    thp = th + rot1_hat + rot2_hat
+
+    poses = np.stack([xp, yp, thp], axis=1)
+    return poses[0] if single else poses
 
 
 # ==========================================================================
