@@ -130,6 +130,7 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
     # ------------------------------------------------------------------
     num = (x - xp) * np.cos(th) + (y - yp) * np.sin(th)
     den = (y - yp) * np.cos(th) - (x - xp) * np.sin(th)
+    den = np.where(np.abs(den) < 1e-12, 1e-12, den)
     mu = 0.5 * num / den  # eq. 5.18
     x_star = (x + xp) / 2 + mu * (y - yp)  # eq. 5.19: arc center
     y_star = (y + yp) / 2 + mu * (xp - x)
