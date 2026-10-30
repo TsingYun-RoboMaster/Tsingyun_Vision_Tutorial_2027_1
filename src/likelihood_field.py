@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from .beam_model import BeamParams
+from .utils import prob_normal
 
 # Default intrinsic parameters for the likelihood field model.  They differ
 # from the physical laser parameters on purpose: sigma_hit here models the
@@ -104,4 +105,15 @@ def likelihood_field_model(scan, poses, beam_angles, world, params=None):
     #                                        #   summed in log space
     # 8:  return q per pose (a float for a single pose)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 3.1: likelihood_field_model (Table 6.3)")
+    keep = scan < params.z_max_range
+    z = scan[keep]
+    angles = beam_angles[keep]
+
+    theta = poses[:, 2:3] + angles[None, :]
+    x_end = poses[:, 0:1] + z * np.cos(theta)
+    y_end = poses[:, 1:2] + z * np.sin(theta)
+    dist_sq = world.obstacle_distance(x_end, y_end) ** 2
+
+    p = params.z_hit * prob_normal(dist_sq, params.sigma_hit ** 2) + params.z_rand / params.z_max_range
+    q = np.exp(np.sum(np.log(np.maximum(p, np.finfo(float).tiny)), axis=1))
+    return float(q[0]) if single else q
