@@ -22,6 +22,8 @@ import numpy as np
 
 from .beam_model import BeamParams
 
+from .utils import prob_normal
+
 # Default intrinsic parameters for the likelihood field model.  They differ
 # from the physical laser parameters on purpose: sigma_hit here models the
 # 2-D spread of beam endpoints around obstacles (pose error, map error,
@@ -104,4 +106,16 @@ def likelihood_field_model(scan, poses, beam_angles, world, params=None):
     #                                        #   summed in log space
     # 8:  return q per pose (a float for a single pose)
     # ------------------------------------------------------------------
+    x,y,theta_pose = (poses[:,0:1],poses[:,1:2],poses[:,2:3])
+    valid = scan < params.z_max_range
+    scan = scan[valid][None,:]
+    beam_angles = beam_angles[valid][None,:]
+    theta = theta_pose + beam_angles
+    x_end = x + scan*np.cos(theta)
+    y_end = y + scan*np.sin(theta)
+    dist2 = world.obstacle_distance(x_end,y_end)**2
+    p = params.z_hit * prob_normal(dist2,params.sigma_hit**2) + params.z_rand/params.z_max_range
+    q = np.exp(np.sum(np.log(np.maximum(p,1e-12)),axis=1))
+    return float(q[0]) if single else q
+
     raise NotImplementedError("task 3.1: likelihood_field_model (Table 6.3)")

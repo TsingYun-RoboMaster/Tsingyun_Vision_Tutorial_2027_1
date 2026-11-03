@@ -29,6 +29,8 @@ Conventions
 from __future__ import annotations
 
 import numpy as np
+from numpy import sin,cos,sign
+
 
 from . import config
 from .utils import prob_normal, sample_normal, wrap_angle
@@ -56,8 +58,9 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
 
     x, y, th = (float(x_prev[0]), float(x_prev[1]), float(x_prev[2]))
     x_t = np.asarray(x_t, dtype=float)
-    xp, yp, thp = (x_t[0], x_t[1], x_t[2]) if x_t.ndim == 1 else (
-        x_t[:, 0], x_t[:, 1], x_t[:, 2])
+    single = (x_t.ndim == 1)
+    x_t = np.atleast_2d(x_t)
+    xp, yp, thp = x_t[:, 0], x_t[:, 1], x_t[:, 2]
 
     # TODO 1.1 -- implement Table 5.1, lines 2-10 (equations 5.17-5.32)
     # ------------------------------------------------------------------
@@ -119,8 +122,38 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
     #          · prob_normal(w - w_hat, a3·|v| + a4·|w|)
     #          · prob_normal(gamma_hat, a5·|v| + a6·|w|)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.1: velocity_motion_model (Table 5.1)")
+    num = (x - xp)*cos(th) + (y - yp)*sin(th)
+    den = (y - yp)*cos(th) - (x - xp)*sin(th)
+    
+    position_coincide = (np.isclose(x, xp) & np.isclose(y, yp))
+    not_rotation = np.isclose(den, 0.0)
+    straight_motion = (not_rotation & (~position_coincide))
+    normal_motion = ((~not_rotation) & (~position_coincide))
 
+    dx, dy = xp - x, yp - y
+    angle_difference = wrap_angle(thp - th)
+
+    v_hat = np.zeros_like(xp, dtype=float)
+    w_hat = np.zeros_like(xp, dtype=float)
+    gamma_hat = np.zeros_like(xp, dtype=float)
+
+    v_hat[straight_motion] =  sign(dx[straight_motion]*cos(th) + dy[straight_motion]*sin(th)) * np.hypot(dx[straight_motion], dy[straight_motion])/dt
+    gamma_hat[straight_motion] = angle_difference[straight_motion]/dt
+
+    w_hat[position_coincide] = angle_difference[position_coincide]/dt
+
+    mu = np.zeros_like(xp, dtype=float)
+    mu[normal_motion] = num[normal_motion] / (2 * den[normal_motion])
+    x_star = (x + xp)/2 + mu*(y - yp)
+    y_star = (y + yp)/2 + mu*(xp - x)
+    r_star = np.hypot(x - x_star, y - y_star)
+    d_theta = np.arctan2(yp - y_star, xp - x_star) - np.arctan2(y - y_star, x - x_star)
+    v_hat[normal_motion] = d_theta[normal_motion]*r_star[normal_motion] / dt
+    w_hat[normal_motion] = d_theta[normal_motion] / dt
+    gamma_hat[normal_motion] = angle_difference[normal_motion]/dt - w_hat[normal_motion]
+
+    return prob_normal(v - v_hat[0], a1*abs(v) + a2*abs(w)) * prob_normal(w - w_hat[0], a3*abs(v) + a4*abs(w)) * prob_normal(gamma_hat[0], a5*abs(v) + a6*abs(w)) if single else prob_normal(v - v_hat, a1*abs(v) + a2*abs(w)) * prob_normal(w - w_hat, a3*abs(v) + a4*abs(w)) * prob_normal(gamma_hat, a5*abs(v) + a6*abs(w))
+    raise NotImplementedError("task 1.1: velocity_motion_model (Table 5.1)")
 
 def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=config.DT, rng=None):
     """Draw pose samples x_t from p(x_t | u_t, x_{t-1}) -- Table 5.3.
@@ -172,6 +205,32 @@ def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=
     # 11: thp = th + w_hat·dt + gamma_hat·dt              # extra final rotation
     # 12: return (xp, yp, thp) per input pose
     # ------------------------------------------------------------------
+    sigma = 1e-6
+    shape = x.shape
+    v_var = np.full(shape, a1 * abs(v) + a2 * abs(w))
+    w_var = np.full(shape, a3 * abs(v) + a4 * abs(w))
+    gamma_var = np.full(shape, a5 * abs(v) + a6 * abs(w))
+
+    v_hat = v + sample_normal(v_var, rng)
+    w_hat = w + sample_normal(w_var, rng)
+    gamma_hat = sample_normal(gamma_var, rng)
+
+    straight = (abs(w_hat) < sigma)
+    normal = (~straight)
+    xp = np.zeros_like(x, dtype=float)
+    yp = np.zeros_like(x, dtype=float)
+
+    xp[straight] = x[straight] + v_hat[straight]*dt*cos(th[straight])
+    yp[straight] = y[straight] + v_hat[straight]*dt*sin(th[straight])
+
+    r = np.zeros_like(x, dtype=float)
+    r[normal] = v_hat[normal] / w_hat[normal]                           
+    xp[normal] = x[normal] - r[normal]*sin(th[normal]) + r[normal]*sin(th[normal] + w_hat[normal]*dt)
+    yp[normal] = y[normal] + r[normal]*cos(th[normal]) - r[normal]*cos(th[normal] + w_hat[normal]*dt)   
+
+    thp = th + w_hat*dt + gamma_hat*dt
+    result = np.column_stack((xp, yp, thp))
+    return result[0] if single else result
     raise NotImplementedError("task 1.2: sample_velocity_motion_model (Table 5.3)")
 
 
@@ -231,6 +290,18 @@ def odometry_motion_model(x_t, u_t, x_prev, alphas=config.ODOMETRY_ALPHAS):
     # 9:  p3 = prob_normal(wrap(rot2 - rot2_hat),   a1·|rot2_hat| + a2·trans_hat)
     # 10: return p1 · p2 · p3
     # ------------------------------------------------------------------
+
+    rot1  = wrap_angle(np.arctan2(ybp - yb, xbp - xb) - thb)
+    trans = np.hypot(xb - xbp, yb - ybp)
+    rot2  = wrap_angle(thbp - thb - rot1)
+    rot1_hat  = wrap_angle(np.arctan2(yp - y, xp - x) - th)
+    trans_hat = np.hypot(x - xp, y - yp)
+    rot2_hat  = wrap_angle(thp - th - rot1_hat)
+    p1 = prob_normal(wrap_angle(rot1 - rot1_hat),   a1*abs(rot1_hat) + a2*trans_hat)
+    p2 = prob_normal(wrap_angle(trans - trans_hat), a3*trans_hat + a4*(abs(rot1_hat) + abs(rot2_hat)))
+    p3 = prob_normal(wrap_angle(rot2 - rot2_hat),   a1*abs(rot2_hat) + a2*trans_hat)
+    return p1* p2* p3
+
     raise NotImplementedError("task 1.3: odometry_motion_model (Table 5.5)")
 
 
@@ -281,6 +352,21 @@ def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng
     # 9:  thp = th + rot1_hat + rot2_hat
     # 10: return (xp, yp, thp) per input pose
     # ------------------------------------------------------------------
+    rot1  = wrap_angle(np.arctan2(ybp - yb, xbp - xb) - thb)
+    trans = np.hypot(xb - xbp, yb - ybp)
+    rot2  = wrap_angle(thbp - thb - rot1)
+    shape = x.shape
+    rot1_var = np.full(shape,a1*abs(rot1)  + a2*abs(trans))
+    trans_var = np.full(shape,a3*trans + a4*(abs(rot1) + abs(rot2)))
+    rot2_var = np.full(shape,a1*abs(rot2)  + a2*trans)
+    rot1_hat  = rot1  - sample_normal(rot1_var,rng)
+    trans_hat = trans - sample_normal(trans_var,rng)
+    rot2_hat  = rot2  - sample_normal(rot2_var,rng)
+    xp = x + trans_hat*cos(th + rot1_hat)
+    yp = y + trans_hat*sin(th + rot1_hat)
+    thp = th + rot1_hat + rot2_hat
+    result = np.column_stack((xp, yp, thp))
+    return result[0] if single else result
     raise NotImplementedError("task 1.4: sample_odometry_motion_model (Table 5.6)")
 
 

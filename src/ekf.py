@@ -27,6 +27,7 @@ import numpy as np
 from . import config
 from .beam_model import BeamParams
 from .utils import make_rng, wrap_angle
+from .motion_models import sample_velocity_motion_model
 
 
 # ==========================================================================
@@ -90,6 +91,30 @@ def ekf_predict(mu, Sigma, u_t, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
     # 9:  Sigma_bar = G*Sigma*G^T + V*M*V^T
     # 10: return (mu_bar, Sigma_bar)
     # ------------------------------------------------------------------
+    zero_alpha = np.zeros(6,dtype=float)
+    mu_bar = sample_velocity_motion_model(u_t,mu,zero_alpha,dt)
+    w_safe = w if abs(w) >= 1e-4 else (1e-4 if w >=0 else -1e-4)
+    r = v / w_safe
+    th = mu[2]
+    G = np.array([
+        [1,0,-r*np.cos(th)+r*np.cos(th+w_safe*dt)],
+        [0,1,-r*np.sin(th) + r*np.sin(th + w_safe*dt)],
+        [0,0,1]
+    ])
+    s = np.sin(th)
+    c = np.cos(th)
+    sp = np.sin(th + w_safe*dt)
+    cp = np.cos(th + w_safe*dt)
+    V = np.array([
+        [(-s + sp)/w_safe ,  v*(s - sp)/w_safe**2 + v*cp*dt/w_safe ,  0],
+        [( c - cp)/w_safe ,  v*(c - cp)/w_safe**2 + v*sp*dt/w_safe ,  0],
+        [0,dt,dt]
+    ])
+    M = np.diag([a1*abs(v) + a2*abs(w) ,  a3*abs(v) + a4*abs(w) ,  a5*abs(v) + a6*abs(w)])
+    Sigma_bar = G @ Sigma @ G.T + V @ M @ V.T
+    return (mu_bar, Sigma_bar)
+
+
     raise NotImplementedError("task 4.1: ekf_predict (Table 7.2, lines 2-4)")
 
 
@@ -126,6 +151,13 @@ def ekf_correct(mu_bar, Sigma_bar, residual, H, R):
     # 4: Sigma = (I - K*H)*Sigma_bar
     # 5: return (mu, Sigma)
     # ------------------------------------------------------------------
+    S = H @ Sigma_bar @ H.T + R
+    K = Sigma_bar@ H.T @np.linalg.inv(S)
+    mu = mu_bar + K@residual
+    mu[2] = wrap_angle(mu[2])
+    Sigma = (np.eye(3) - K@H)@Sigma_bar
+    return (mu,Sigma)
+
     raise NotImplementedError("task 4.2: ekf_correct (Table 7.2, lines 12-15)")
 
 

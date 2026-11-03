@@ -91,6 +91,18 @@ def p_hit_density(z, z_star, params):
     # 2: p = eta · (1/(sigma·√(2π))) · exp( -(z - z*)² / (2·sigma²) )
     # 3: return p where 0 ≤ z ≤ z_max, else 0                         # eq. 6.4
     # ------------------------------------------------------------------
+    
+    z = np.asarray(z, dtype=float)
+    z_star = np.asarray(z_star, dtype=float)
+
+    sigma = params.sigma_hit
+    z_max = params.z_max_range
+
+    denominator = gaussian_cdf((z_max - z_star) / sigma) - gaussian_cdf((0 - z_star) / sigma)
+    eta = 1.0 / np.maximum(denominator, 1e-12)
+    p = eta / (sigma*np.sqrt(2.0*np.pi)) * np.exp(-((z - z_star)**2) / (2 * (sigma ** 2)))
+    return np.where((z >= 0) & (z <= z_max), p, 0.0)
+    
     raise NotImplementedError("task 2.1: p_hit_density (eq. 6.4-6.6)")
 
 
@@ -113,6 +125,16 @@ def p_short_density(z, z_star, params):
     # 3: return p where 0 ≤ z ≤ z*, else 0                            # eq. 6.7
     # 4: if z* ≤ 0, return 0 everywhere (no truncation interval)
     # ------------------------------------------------------------------
+    z = np.asarray(z, dtype=float)
+    z_star = np.asarray(z_star, dtype=float)
+    eta = np.zeros_like(z, dtype=float)
+    p = np.zeros_like(z, dtype=float)
+    lambda_short = params.lambda_short
+    normal = (z_star > 0)
+    eta[normal] = 1 / (1 - np.exp(-lambda_short * z_star[normal]))
+    p[normal] = eta[normal] * lambda_short * np.exp(-lambda_short * z[normal])
+    return np.where(((z >= 0) & (z <= z_star) & (z_star > 0)), p, 0)
+
     raise NotImplementedError("task 2.1: p_short_density (eq. 6.7-6.10)")
 
 
@@ -123,6 +145,8 @@ def p_max_density(z, params):
     # Return one where the measurement equals the maximum range exactly
     # (compare with a tiny absolute tolerance), zero elsewhere.
     # ------------------------------------------------------------------
+    z = np.asarray(z, dtype=float)
+    return np.isclose(z, params.z_max_range).astype(float)
     raise NotImplementedError("task 2.1: p_max_density (eq. 6.11)")
 
 
@@ -133,6 +157,9 @@ def p_rand_density(z, params):
     # Return one over z_max where the measurement lies inside [0, z_max),
     # zero at z_max and beyond.
     # ------------------------------------------------------------------
+    z = np.asarray(z, dtype=float)
+    z_max = params.z_max_range
+    return np.where(((z >= 0) & (z < z_max)), 1.0 / z_max, 0.0)
     raise NotImplementedError("task 2.1: p_rand_density (eq. 6.12)")
 
 
@@ -153,6 +180,11 @@ def p_beam(z, z_star, params):
     # 1: return z_hit·p_hit(z, z*) + z_short·p_short(z, z*)
     #          + z_max·p_max(z)      + z_rand·p_rand(z)
     # ------------------------------------------------------------------
+    z_hit = params.z_hit
+    z_short = params.z_short
+    z_max = params.z_max
+    z_rand = params.z_rand
+    return z_hit * p_hit_density(z, z_star, params) + z_short * p_short_density(z, z_star, params) + z_max * p_max_density(z, params) + z_rand * p_rand_density(z, params)
     raise NotImplementedError("task 2.1: p_beam (Table 6.1, eq. 6.13)")
 
 
@@ -248,6 +280,21 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         #    e_rand  = z_rand·d_rand  / total
         e_hit = e_short = e_max = e_rand = None  # TODO: replace
 
+        d_hit = p_hit_density(z, z_star, params)
+        d_short = p_short_density(z, z_star, params)
+        d_max = p_max_density(z, params)
+        d_rand  = p_rand_density(z, params)
+        z_hit = params.z_hit
+        z_short = params.z_short
+        z_max = params.z_max
+        z_rand = params.z_rand
+        total = z_hit*d_hit + z_short*d_short + z_max*d_max + z_rand*d_rand
+        total = np.maximum(total, 1e-12)
+        e_hit = z_hit * d_hit / total
+        e_short = z_short * d_short / total
+        e_max = z_max * d_max / total
+        e_rand = z_rand * d_rand / total
+
         # ---- M-step (TODO 2.2b): parameter updates, eq. 6.30-6.32 -----
         # TODO: re-estimate all six intrinsic parameters from the
         # responsibilities:
@@ -273,7 +320,16 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         # 4: lambda = solve_lambda_short(e_short, z, z_star)   # exact, provided
         # 5: params = BeamParams(z_hit, z_short, z_max, z_rand, sigma,
         #                        lambda, params.z_max_range)
-        raise NotImplementedError("task 2.2: EM step of learn_intrinsic_parameters")
+        n = len(z)
+        z_hit = 1.0 / n * np.sum(e_hit)
+        z_short = 1.0 / n * np.sum(e_short)
+        z_max = 1.0 / n * np.sum(e_max)
+        z_rand = 1.0 / n * np.sum(e_rand)
+        sigma = np.sqrt(np.sum(e_hit*(z - z_star)**2) / np.sum(e_hit))
+        lamb = solve_lambda_short(e_short, z, z_star)
+        params = BeamParams(z_hit, z_short, z_max, z_rand, sigma, lamb, params.z_max_range)
+
+        # raise NotImplementedError("task 2.2: EM step of learn_intrinsic_parameters")
 
         ll = float(np.sum(np.log(p_beam(z, z_star, params))))
         history["loglik"].append(ll)

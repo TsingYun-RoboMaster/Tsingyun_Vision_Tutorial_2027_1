@@ -17,3 +17,27 @@ __pycache__/
 
 # generated outputs
 results/
+
+# Virtual environments
+.venv/
+venv/
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment settings
+.env
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+
+# IDE settings
+.vscode/
+
+# Logs
+*.log
+
+uv.lock
+/data
