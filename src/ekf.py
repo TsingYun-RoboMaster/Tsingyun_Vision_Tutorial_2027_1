@@ -27,6 +27,7 @@ import numpy as np
 from . import config
 from .beam_model import BeamParams
 from .utils import make_rng, wrap_angle
+from .motion_models import sample_velocity_motion_model
 
 
 # ==========================================================================
@@ -50,6 +51,8 @@ def ekf_predict(mu, Sigma, u_t, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
     """
     v, w = float(u_t[0]), float(u_t[1])
     a1, a2, a3, a4, a5, a6 = alphas
+    mu=np.asarray(mu, dtype=float)
+    Sigma= np.asarray(Sigma, dtype=float)
 
     # TODO 4.1 -- implement Table 7.2, lines 2-4 (equations 7.4, 7.8)
     # ------------------------------------------------------------------
@@ -75,23 +78,21 @@ def ekf_predict(mu, Sigma, u_t, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
     #
     # Pseudocode:
     #
-    # 1:  mu_bar = sample_velocity_motion_model(u_t, mu, (0,...,0), dt)
-    # 2:  w_safe = omega if |omega| >= 1e-4 else sign(omega)*1e-4
-    # 3:  r = v / w_safe
-    # 4:  G = [[1, 0, -r*cos(th) + r*cos(th + w_safe*dt)],
-    #         [0, 1, -r*sin(th) + r*sin(th + w_safe*dt)],
-    #         [0, 0, 1]]
-    # 5:  s = sin(th) ;  c = cos(th)
-    # 6:  sp = sin(th + w_safe*dt) ;  cp = cos(th + w_safe*dt)
-    # 7:  V = [[(-s + sp)/w_safe ,  v*(s - sp)/w_safe^2 + v*cp*dt/w_safe ,  0],
-    #         [( c - cp)/w_safe ,  v*(c - cp)/w_safe^2 + v*sp*dt/w_safe ,  0],
-    #         [0               ,  dt                                  ,  dt]]
-    # 8:  M = diag(a1*|v| + a2*|w| ,  a3*|v| + a4*|w| ,  a5*|v| + a6*|w|)
-    # 9:  Sigma_bar = G*Sigma*G^T + V*M*V^T
-    # 10: return (mu_bar, Sigma_bar)
-    # ------------------------------------------------------------------
-    raise NotImplementedError("task 4.1: ekf_predict (Table 7.2, lines 2-4)")
-
+    mu_bar = np.asarray(sample_velocity_motion_model(u_t, mu, ((0.0,)*6), dt))
+    w_safe = w if abs(w) >= 1e-4 else (np.sign(w) or 1.0)*1e-4
+    th = float(mu[2])
+    r = v / w_safe
+    G = np.array([[1, 0, -r*np.cos(th) + r*np.cos(th + w_safe*dt)],
+            [0, 1, -r*np.sin(th) + r*np.sin(th + w_safe*dt)],
+            [0, 0, 1]])
+    s = np.sin(th) ;  c = np.cos(th)
+    sp = np.sin(th + w_safe*dt) ;  cp = np.cos(th + w_safe*dt)
+    V = np.array([[(-s + sp)/w_safe ,  v*(s - sp)/w_safe**2 + v*cp*dt/w_safe ,  0],
+            [( c - cp)/w_safe ,  v*(c - cp)/w_safe**2 + v*sp*dt/w_safe ,  0],
+            [0               ,  dt                                  ,  dt]])
+    M = np.diag([a1*abs(v) + a2*abs(w_safe) ,  a3*abs(v) + a4*abs(w_safe) ,  a5*abs(v)+ a6*abs(w_safe)])
+    Sigma_bar = G @ Sigma @ np.transpose(G) + V @ M @ np.transpose(V)
+    return (mu_bar, Sigma_bar) #these are predict NOT posterior (thats after the update step)
 
 def ekf_correct(mu_bar, Sigma_bar, residual, H, R):
     """Measurement update, Table 7.2 lines 12-15 (stacked-beam form).
@@ -120,13 +121,13 @@ def ekf_correct(mu_bar, Sigma_bar, residual, H, R):
     #
     # Pseudocode:
     #
-    # 1: S = H*Sigma_bar*H^T + R
-    # 2: K = Sigma_bar*H^T*S^-1
-    # 3: mu = mu_bar + K*residual ;  mu[theta] = wrap(mu[theta])
-    # 4: Sigma = (I - K*H)*Sigma_bar
-    # 5: return (mu, Sigma)
+    S = H @ Sigma_bar @ np.transpose(H) + R
+    K = Sigma_bar @ np.transpose(H) @ np.linalg.inv(S)
+    mu = mu_bar + K@residual   
+    mu[2] = wrap_angle(mu[2])
+    Sigma = (np.eye((K@H).shape[0]) - K@H) @ Sigma_bar
+    return (mu, Sigma)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 4.2: ekf_correct (Table 7.2, lines 12-15)")
 
 
 # ==========================================================================

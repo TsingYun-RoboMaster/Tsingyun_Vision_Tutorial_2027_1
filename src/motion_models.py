@@ -29,7 +29,7 @@ Conventions
 from __future__ import annotations
 
 import numpy as np
-
+import math
 from . import config
 from .utils import prob_normal, sample_normal, wrap_angle
 
@@ -37,6 +37,8 @@ from .utils import prob_normal, sample_normal, wrap_angle
 # ==========================================================================
 # Velocity motion model
 # ==========================================================================
+
+
 
 
 def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=config.DT):
@@ -59,67 +61,37 @@ def velocity_motion_model(x_t, u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=co
     xp, yp, thp = (x_t[0], x_t[1], x_t[2]) if x_t.ndim == 1 else (
         x_t[:, 0], x_t[:, 1], x_t[:, 2])
 
-    # TODO 1.1 -- implement Table 5.1, lines 2-10 (equations 5.17-5.32)
-    # ------------------------------------------------------------------
-    # Steps (work with arrays element-wise; x_prev components are scalars):
-    #
-    # 1. Recover the center of the circle that the robot must have turned
-    #    on (equations 5.18-5.19):
-    #    - the numerator term is (x - xp)*cos(theta) + (y - yp)*sin(theta)
-    #    - the denominator term is (y - yp)*cos(theta) - (x - xp)*sin(theta)
-    #    - mu is half the numerator divided by the denominator
-    #    - the center x* is the midpoint between the two positions, plus
-    #      mu times (y - yp); the center y* is the midpoint plus mu times
-    #      (xp - x).
-    # 2. The turning radius r* is the Euclidean distance from (x, y) to
-    #    the center (equation 5.20).
-    # 3. The swept angle delta_theta is the difference of two angles: the
-    #    angle of the vector from the center to the final position, minus
-    #    the angle of the vector from the center to the initial position
-    #    (equation 5.21); use the two-argument arctangent (atan2) for both.
-    # 4. The implied velocities (equations 5.23-5.24) are
-    #    v_hat = delta_theta * r* / dt   and   omega_hat = delta_theta / dt.
-    # 5. The implied extra final rotation (equation 5.25) is
-    #    gamma_hat = heading_change / dt - omega_hat, where heading_change
-    #    is the wrapped difference thp - theta.
-    # 6. Degenerate cases -- handle them or the divisions blow up:
-    #    - straight motion (denominator near zero, positions distinct):
-    #      v_hat is plus or minus (distance moved / dt) with the sign of
-    #      the heading-projection of the displacement onto the heading
-    #      direction, omega_hat is zero, gamma_hat is
-    #      heading_change / dt;
-    #    - rotation in place (positions coincide): v_hat is zero and
-    #      omega_hat is heading_change / dt.
-    # 7. Return the product of three probabilities (equation 5.32), each
-    #    given by a zero-mean error density whose variance scales with the
-    #    commanded motion (utils.prob_normal(value, variance)):
-    #    - the difference between v and v_hat, variance a1*|v| + a2*|w|
-    #    - the difference between omega and omega_hat, variance a3*|v| + a4*|w|
-    #    - gamma_hat itself (the commanded extra rotation is zero),
-    #      variance a5*|v| + a6*|w|
-    #
-    # Pseudocode:
-    #
-    # 1:  num = (x - xp)·cos(th) + (y - yp)·sin(th)
-    # 2:  den = (y - yp)·cos(th) - (x - xp)·sin(th)
-    # 3:  mu  = ½ · num / den                          # eq. 5.18
-    # 4:  x_star = (x + xp)/2 + mu·(y - yp)            # eq. 5.19: arc center
-    # 5:  y_star = (y + yp)/2 + mu·(xp - x)
-    # 6:  r_star = dist((x, y), (x_star, y_star))      # eq. 5.20: radius
-    # 7:  d_theta = atan2(yp - y_star, xp - x_star) - atan2(y - y_star, x - x_star)
-    # 8:  v_hat = d_theta·r_star / dt                  # eq. 5.24
-    # 9:  w_hat = d_theta / dt
-    # 10: gamma_hat = wrap(thp - th)/dt - w_hat        # eq. 5.25
-    # 11: if |den| ≈ 0 and the two positions differ:   # straight motion
-    # 12:     v_hat = sign((xp - x)·cos(th) + (yp - y)·sin(th)) · dist((x, y), (xp, yp))/dt
-    # 13:     w_hat = 0 ;  gamma_hat = wrap(thp - th)/dt
-    # 14: if the two positions coincide:               # rotation in place
-    # 15:     v_hat = 0 ;  w_hat = wrap(thp - th)/dt ;  gamma_hat = 0
-    # 16: return prob_normal(v - v_hat, a1·|v| + a2·|w|)          # eq. 5.32
-    #          · prob_normal(w - w_hat, a3·|v| + a4·|w|)
-    #          · prob_normal(gamma_hat, a5·|v| + a6·|w|)
-    # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.1: velocity_motion_model (Table 5.1)")
+    num = (x - xp)*np.cos(th) + (y - yp)*np.sin(th) ## For every pose, calculates nums
+    den = (y - yp)*np.cos(th) - (x - xp)*np.sin(th) ## for every pose calculates den
+    straight = (np.abs(den) < 1e-6) & ((np.abs(xp-x) > 1e-6) | (np.abs(yp-y) > 1e-6)) ## Check if true for every pose
+    rotation = (np.abs(xp - x) < 1e-6) & (np.abs(yp - y) < 1e-6)
+    general= ~straight & ~rotation
+    v_hat = np.zeros_like(xp, dtype=float) ## we initiallize same size as x and same data type
+    w_hat = np.zeros_like(xp, dtype=float)
+    gamma_hat = np.zeros_like(xp, dtype=float)
+
+    v_hat[straight]= np.sign((xp[straight] - x)*np.cos(th) + (yp[straight] - y)*np.sin(th)) * np.sqrt((x-xp[straight])**2 +(y- yp[straight])**2)/dt
+    w_hat[straight]=0
+    gamma_hat[straight]=wrap_angle(thp[straight]-th)/dt
+
+    v_hat[rotation]=0
+    w_hat[rotation]=wrap_angle(thp[rotation]-th)/dt
+    gamma_hat[rotation]=0
+
+    mu= 0.5*(num[general]/den[general])
+    x_star = (x + xp[general])/2 + mu*(y- yp[general])            # eq. 5.19: arc center
+    y_star = (y + yp[general])/2 + mu*(xp[general] - x)
+    r_star = np.sqrt((x-x_star)**2+(y-y_star)**2)      # eq. 5.20: radius
+    d_theta = wrap_angle(np.arctan2(yp[general] - y_star, xp[general] - x_star) - np.arctan2(y - y_star, x - x_star))
+    v_hat[general] = d_theta*r_star / dt                  # eq. 5.24
+    w_hat[general] = d_theta / dt
+    gamma_hat[general] = wrap_angle(thp[general] - th)/dt - w_hat[general]
+
+    ## Great so now we have changed our original v_hats w_hats and gamma hats                
+   
+    return (prob_normal(v - v_hat, a1*np.abs(v) + a2*np.abs(w)) * prob_normal(w - w_hat, a3*np.abs(v) + a4*np.abs(w)) * prob_normal(gamma_hat, a5*np.abs(v) + a6*np.abs(w)))
+            
+
 
 
 def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=config.DT, rng=None):
@@ -129,13 +101,43 @@ def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=
     (a particle set -> one sample per particle).  Return the same shape.
     """
     if rng is None:
-        rng = np.random.default_rng()
-    v, w = float(u_t[0]), float(u_t[1])
-    a1, a2, a3, a4, a5, a6 = alphas
+        rng = np.random.default_rng() ## np random number in each element
+    v, w = float(u_t[0]), float(u_t[1]) ## commanded velo and rot
+    a1, a2, a3, a4, a5, a6 = alphas ## Weights of noise
 
-    single = np.ndim(x_prev) == 1
-    x_prev = np.atleast_2d(np.asarray(x_prev, dtype=float))
-    x, y, th = x_prev[:, 0], x_prev[:, 1], x_prev[:, 2]
+    single = np.ndim(x_prev) == 1 ##True if single pose
+    x_prev = np.atleast_2d(np.asarray(x_prev, dtype=float))  ## basiclaly make all the same shape so we cna run the same code regardless of single or not
+    x, y, th = x_prev[:, 0], x_prev[:, 1], x_prev[:, 2] ## Give me the first col, second col, third col
+    v_hat = v + sample_normal(np.full_like(x,a1*abs(v) + a2*abs(w)),rng)  ## we need to input a np into the func so that it can do rng on each term inside. So we def a np like x, and we put the values of wtv inside
+    w_hat = w + sample_normal(np.full_like(x,a3*abs(v) + a4*abs(w)),rng)
+    gamma_hat = sample_normal(np.full_like(x,a5*abs(v) + a6*abs(w)),rng)
+    rotation = np.abs(w_hat)<1e-6
+    general= ~rotation
+    xp=np.zeros_like(x,dtype=float)
+    yp=np.zeros_like(y,dtype=float)
+
+    xp[rotation] = x[rotation]+v_hat[rotation]*dt*np.cos(th[rotation])
+    yp[rotation] = y[rotation] + v_hat[rotation]*dt*np.sin(th[rotation])
+
+    r= v_hat[general]/w_hat[general]
+    xp[general]= x[general]-r*np.sin(th[general])+r*np.sin(th[general]+w_hat[general]*dt) 
+    yp[general]= y[general] + r*np.cos(th[general])- r*np.cos(th[general]+w_hat[general]*dt)
+    thp= th + w_hat*dt + gamma_hat * dt
+
+    result=np.column_stack((xp,yp,thp))
+    if single:
+        return result[0]
+    else:
+        return result             # straight-line fallback
+    # 5:      xp = x + v_hat·dt·cos(th)
+    # 6:      yp = y + v_hat·dt·sin(th)
+    # 7:  else:                                           # arc, eq. 5.16
+    # 8:      r = v_hat / w_hat                           # turning radius
+    # 9:      xp = x - r·sin(th) + r·sin(th + w_hat·dt)
+    # 10:     yp = y + r·cos(th) - r·cos(th + w_hat·dt)
+    # 11: thp = th + w_hat·dt + gamma_hat·dt              # extra final rotation
+    # 12: return (xp, yp, thp) per input pose
+
 
     # TODO 1.2 -- implement Table 5.3 (equations 5.10, 5.15, 5.16)
     # ------------------------------------------------------------------
@@ -159,20 +161,8 @@ def sample_velocity_motion_model(u_t, x_prev, alphas=config.VELOCITY_ALPHAS, dt=
     #
     # Pseudocode:
     #
-    # 1:  v_hat = v + sample_normal(a1·|v| + a2·|w|)      # one draw per particle
-    # 2:  w_hat = w + sample_normal(a3·|v| + a4·|w|)
-    # 3:  gamma_hat = sample_normal(a5·|v| + a6·|w|)
-    # 4:  if |w_hat| < ε (use ε = 1e-6):                  # straight-line fallback
-    # 5:      xp = x + v_hat·dt·cos(th)
-    # 6:      yp = y + v_hat·dt·sin(th)
-    # 7:  else:                                           # arc, eq. 5.16
-    # 8:      r = v_hat / w_hat                           # turning radius
-    # 9:      xp = x - r·sin(th) + r·sin(th + w_hat·dt)
-    # 10:     yp = y + r·cos(th) - r·cos(th + w_hat·dt)
-    # 11: thp = th + w_hat·dt + gamma_hat·dt              # extra final rotation
-    # 12: return (xp, yp, thp) per input pose
+
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.2: sample_velocity_motion_model (Table 5.3)")
 
 
 # ==========================================================================
@@ -187,13 +177,32 @@ def odometry_motion_model(x_t, u_t, x_prev, alphas=config.ODOMETRY_ALPHAS):
     pose pair ``(2, 3)``.  ``x_t`` may be a pose or an array of poses.
     """
     a1, a2, a3, a4 = alphas
-    xb, yb, thb = u_t[0]
-    xbp, ybp, thbp = u_t[1]
+    xb, yb, thb = u_t[0] # Prior from odometry
+    xbp, ybp, thbp = u_t[1] #Mi guess from odometry
 
-    x, y, th = (float(x_prev[0]), float(x_prev[1]), float(x_prev[2]))
-    x_t = np.asarray(x_t, dtype=float)
+    x, y, th = (float(x_prev[0]), float(x_prev[1]), float(x_prev[2])) # my prior
+    x_t = np.asarray(x_t, dtype=float) ## U nvr know what the input, js make sure its in np
     xp, yp, thp = (x_t[0], x_t[1], x_t[2]) if x_t.ndim == 1 else (
-        x_t[:, 0], x_t[:, 1], x_t[:, 2])
+        x_t[:, 0], x_t[:, 1], x_t[:, 2]) ##gimme indiv elements if 1 dim, else gimme the cols. My guesses
+
+    # Guesses of current pos in x_t. Guess of prev pos in x_prev
+    # Guesses from odometry 'sensors' of prev pos and current pos in ut
+    # This ut hsould have been calibrated from another function, to turn sensor inputs into guesses of x and y bar
+    # I want to know how likely is my guess for my current time step based on how well it aligns with the odometry results
+
+    # relative motion measured by the odometry (eqs. 5.34-5.36):
+    rot1  = wrap_angle(np.atan2(ybp - yb, xbp - xb) - thb)
+    trans = np.sqrt((xb-xbp)**2+ (yb-ybp)**2)
+    rot2  = wrap_angle(thbp - thb - rot1)
+    # relative motion implied by the hypothetical pose pair (lines 5-7):
+    rot1_hat  = wrap_angle(np.atan2(yp - y, xp - x) - th)
+    trans_hat = np.sqrt((x-xp)**2 + (y-yp)**2)
+    rot2_hat  = wrap_angle(thp - th - rot1_hat)
+    # error probabilities (lines 8-10, eqs. 5.44-5.46; wrap each difference!):
+    p1 = prob_normal(wrap_angle(rot1 - rot1_hat),   a1*np.abs(rot1_hat) + a2*np.abs(trans_hat))
+    p2 = prob_normal(trans - trans_hat, a3*trans_hat + a4*(np.abs(rot1_hat) + np.abs(rot2_hat)))
+    p3 = prob_normal(wrap_angle(rot2 - rot2_hat),   a1*np.abs(rot2_hat) + a2*trans_hat)
+    return p1 * p2 * p3
 
     # TODO 1.3 -- implement Table 5.5, lines 2-11 (equations 5.34-5.46)
     # ------------------------------------------------------------------
@@ -231,7 +240,6 @@ def odometry_motion_model(x_t, u_t, x_prev, alphas=config.ODOMETRY_ALPHAS):
     # 9:  p3 = prob_normal(wrap(rot2 - rot2_hat),   a1·|rot2_hat| + a2·trans_hat)
     # 10: return p1 · p2 · p3
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.3: odometry_motion_model (Table 5.5)")
 
 
 def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng=None):
@@ -245,6 +253,23 @@ def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng
     single = np.ndim(x_prev) == 1
     x_prev = np.atleast_2d(np.asarray(x_prev, dtype=float))
     x, y, th = x_prev[:, 0], x_prev[:, 1], x_prev[:, 2]
+
+    rot1  = wrap_angle(np.atan2(ybp - yb, xbp - xb) - thb)
+    trans = np.sqrt((xb-xbp)**2+ (yb - ybp)**2)
+    rot2  = wrap_angle(thbp - thb - rot1)
+    # noisy relative motion, one draw per particle (eqs. 5.37-5.39):
+    rot1_hat  = rot1  - sample_normal(np.full_like(x,a1*np.abs(rot1)  + a2*np.abs(trans)),rng)
+    trans_hat = trans - sample_normal(np.full_like(x,a3*trans + a4*(np.abs(rot1) + np.abs(rot2))),rng)
+    rot2_hat  = rot2  - sample_normal(np.full_like(x,a1*np.abs(rot2)  + a2*np.abs(trans)),rng)
+    # compose onto each particle pose (eq. 5.40):
+    xp = x + trans_hat*np.cos(th + rot1_hat)
+    yp = y + trans_hat*np.sin(th + rot1_hat)
+    thp = th + rot1_hat + rot2_hat
+    if single:
+        return(xp[0],yp[0],thp[0])
+    else:
+        return(np.column_stack((xp,yp,thp)))
+
 
     # TODO 1.4 -- implement Table 5.6 (equations 5.37-5.40)
     # ------------------------------------------------------------------
@@ -281,7 +306,6 @@ def sample_odometry_motion_model(u_t, x_prev, alphas=config.ODOMETRY_ALPHAS, rng
     # 9:  thp = th + rot1_hat + rot2_hat
     # 10: return (xp, yp, thp) per input pose
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 1.4: sample_odometry_motion_model (Table 5.6)")
 
 
 # ==========================================================================

@@ -74,7 +74,15 @@ class BeamParams:
 
 def p_hit_density(z, z_star, params):
     """Gaussian around the true range, truncated to [0, z_max] (eq. 6.4-6.6)."""
-    # TODO 2.1a -- the hit component
+    # Theoratical spot, z_star, measured spot z. How likely is our measured spot givne our ray casted theoraticla spot
+    sigma_hit = params.sigma_hit
+    z_max = params.z_max_range
+    eta = 1 / (gaussian_cdf((z_max - z_star) / sigma_hit) - gaussian_cdf((0 - z_star) / sigma_hit))
+    # Do note that gaussain cdf auto uses np for all the values of z_star, so eta is an np (alos note that z is literally just the measureed fella)
+    p = eta * (1 / (params.sigma_hit * np.sqrt(2 * np.pi))) * np.exp(-((z - z_star) ** 2) / (2 * params.sigma_hit ** 2))
+    p = np.where((z >= 0) & (z <= params.z_max_range),p,0.0)
+    return p
+    # TODO 2.1a -- the hit component 
     # ------------------------------------------------------------------
     # 1. Evaluate the Gaussian density with mean z_star and standard
     #    deviation sigma_hit at every measurement z.
@@ -85,17 +93,29 @@ def p_hit_density(z, z_star, params):
     # 3. The density is zero outside the interval [0, z_max] (equation
     #    6.4).
     #
-    # Pseudocode:
-    #
-    # 1: eta = 1 / ( Phi((z_max - z*)/sigma) - Phi((0 - z*)/sigma) )   # eq. 6.6
-    # 2: p = eta · (1/(sigma·√(2π))) · exp( -(z - z*)² / (2·sigma²) )
-    # 3: return p where 0 ≤ z ≤ z_max, else 0                         # eq. 6.4
-    # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_hit_density (eq. 6.4-6.6)")
+    # # Pseudocode:
+    # #
+    # eta = 1 / ( Phi((z_max - z*)/sigma) - Phi((0 - z*)/sigma) )   # eq. 6.6
+    # p = eta · (1/(sigma·√(2π))) · exp( -(z - z*)² / (2·sigma²) )
+    # return p where 0 ≤ z ≤ z_max, else 0                         # eq. 6.4
+    # # ------------------------------------------------------------------
+    # raise NotImplementedError("task 2.1: p_hit_density (eq. 6.4-6.6)")
 
 
 def p_short_density(z, z_star, params):
     """Exponential truncated to [0, z*] (eq. 6.7-6.10)."""
+    lambda_short=params.lambda_short
+    z, z_star = np.broadcast_arrays(
+        np.asarray(z, dtype=float),
+        np.asarray(z_star, dtype=float)
+    )
+    real= z_star>0
+    denominator = 1 - np.exp(-lambda_short*z_star)
+    eta = 1 / np.where(real, denominator, 1.0) ## NP.where works with 0D scalars, so we dont have to do  z[wtv] anymore
+    p = eta * lambda_short * np.exp(-lambda_short * z) ##I keep getting an error cuz z_star[real] will not work when z_star is a float
+    p = np.where((0<=z)&(z<=z_star)&(real),p,0.0)
+    return p
+
     # TODO 2.1b -- the short component
     # ------------------------------------------------------------------
     # 1. Evaluate the exponential density with rate lambda_short at every
@@ -118,22 +138,24 @@ def p_short_density(z, z_star, params):
 
 def p_max_density(z, params):
     """Point mass at the maximum range (eq. 6.11)."""
+    z_max = params.z_max_range
+    return np.where(np.abs(z - z_max) < 1e-6, 1.0, 0.0)
     # TODO 2.1c -- the max component
     # ------------------------------------------------------------------
     # Return one where the measurement equals the maximum range exactly
     # (compare with a tiny absolute tolerance), zero elsewhere.
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_max_density (eq. 6.11)")
 
 
 def p_rand_density(z, params):
     """Uniform over [0, z_max) (eq. 6.12)."""
+    z_max = params.z_max_range
+    return np.where((z >= 0) & (z < z_max), 1 / z_max, 0.0)
     # TODO 2.1d -- the random component
     # ------------------------------------------------------------------
     # Return one over z_max where the measurement lies inside [0, z_max),
     # zero at z_max and beyond.
-    # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_rand_density (eq. 6.12)")
+
 
 
 def p_beam(z, z_star, params):
@@ -142,6 +164,12 @@ def p_beam(z, z_star, params):
     ``z`` and ``z_star`` broadcast against each other (scalar, array of
     beams, or measurement grid).
     """
+    z_hit=params.z_hit
+    z_short=params.z_short
+    z_max=params.z_max
+    z_rand=params.z_rand
+    return (z_hit*p_hit_density(z, z_star,params) + z_short*p_short_density(z, z_star,params) + z_max*p_max_density(z,params)   + z_rand*p_rand_density(z,params))
+
     # TODO 2.1e -- the mixture (equation 6.13)
     # ------------------------------------------------------------------
     # The beam probability is the weighted sum of the four component
@@ -153,7 +181,7 @@ def p_beam(z, z_star, params):
     # 1: return z_hit·p_hit(z, z*) + z_short·p_short(z, z*)
     #          + z_max·p_max(z)      + z_rand·p_rand(z)
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 2.1: p_beam (Table 6.1, eq. 6.13)")
+
 
 
 def beam_range_finder_model(scan, z_star, params):
@@ -222,7 +250,7 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
 
     history = {"loglik": [], "params": []}
     prev_ll = -np.inf
-    for _ in range(max_iter):
+    for _ in range(max_iter): ## Bsaically repeat until convergence
         # ---- E-step (TODO 2.2a): responsibilities, eq. 6.28-6.29 ------
         # TODO: compute, for every measurement i, the posterior
         # probability e_hit, e_short, e_max, e_rand that it was produced
@@ -236,17 +264,22 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         #
         # Pseudocode:
         #
-        # 1: d_hit   = p_hit_density(z, z*, params)      # the four component
-        #    d_short = p_short_density(z, z*, params)    # densities under the
-        #    d_max   = p_max_density(z, params)          # CURRENT parameters
-        #    d_rand  = p_rand_density(z, params)
-        # 2: total = z_hit·d_hit + z_short·d_short + z_max·d_max + z_rand·d_rand
-        # 3: total = max(total, tiny)                    # guard the division
-        # 4: e_hit   = z_hit·d_hit   / total             # responsibility of
-        #    e_short = z_short·d_short / total           # each mechanism for
-        #    e_max   = z_max·d_max   / total             # each measurement
-        #    e_rand  = z_rand·d_rand  / total
-        e_hit = e_short = e_max = e_rand = None  # TODO: replace
+        d_hit   = p_hit_density(z, z_star, params)      # the four component
+        d_short = p_short_density(z, z_star, params)    # densities under the
+        d_max   = p_max_density(z, params)          # CURRENT parameters
+        d_rand  = p_rand_density(z, params)
+        z_hit=params.z_hit
+        z_short=params.z_short
+        z_max=params.z_max
+        z_rand=params.z_rand
+        total = z_hit*d_hit + z_short*d_short + z_max*d_max + z_rand*d_rand #Literally normalize means each over total
+        total = np.maximum(total, 1e-12)                    # guard the division
+        e_hit   = z_hit*d_hit   / total             # responsibility of
+        e_short = z_short*d_short / total           # each mechanism for
+        e_max   = z_max*d_max   / total             # each measurement
+        e_rand  = z_rand*d_rand  / total
+
+        #now after this i have an np_array for each e
 
         # ---- M-step (TODO 2.2b): parameter updates, eq. 6.30-6.32 -----
         # TODO: re-estimate all six intrinsic parameters from the
@@ -264,16 +297,15 @@ def learn_intrinsic_parameters(z, z_star, initial=None, max_iter=50, tol=1e-8):
         #
         # Pseudocode:
         #
-        # 1: n = number of measurements
-        # 2: z_hit   = (1/n)·Σ_i e_hit_i                 # mixture weights:
-        #    z_short = (1/n)·Σ_i e_short_i               # average
-        #    z_max   = (1/n)·Σ_i e_max_i                 # responsibility
-        #    z_rand  = (1/n)·Σ_i e_rand_i
-        # 3: sigma = √( Σ_i e_hit_i·(z_i - z*_i)² / Σ_i e_hit_i )        # eq. 6.31
-        # 4: lambda = solve_lambda_short(e_short, z, z_star)   # exact, provided
-        # 5: params = BeamParams(z_hit, z_short, z_max, z_rand, sigma,
-        #                        lambda, params.z_max_range)
-        raise NotImplementedError("task 2.2: EM step of learn_intrinsic_parameters")
+        n = len(z)
+        z_hit   = (1/n)*np.sum(e_hit)            # mixture weights:
+        z_short = (1/n)*np.sum(e_short)               # average
+        z_max   = (1/n)*np.sum(e_max)              # responsibility
+        z_rand  = (1/n)*np.sum(e_rand)
+        sigma = np.sqrt( np.sum(e_hit*np.square(z - z_star)) / np.sum(e_hit))        # eq. 6.31
+        lambda_short = solve_lambda_short(e_short, z, z_star)   # exact, provided
+        params = BeamParams(z_hit, z_short, z_max, z_rand, sigma,
+                               lambda_short, params.z_max_range)
 
         ll = float(np.sum(np.log(p_beam(z, z_star, params))))
         history["loglik"].append(ll)

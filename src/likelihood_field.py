@@ -17,6 +17,7 @@ squared distance from an endpoint to the nearest obstacle.
 """
 
 from __future__ import annotations
+from .utils import prob_normal
 
 import numpy as np
 
@@ -89,19 +90,17 @@ def likelihood_field_model(scan, poses, beam_angles, world, params=None):
     #    -- sum the logarithms (floor each factor with a tiny constant so
     #    the logarithm stays finite) and exponentiate.
     # 6. Return a float for a single pose, an (N,) array otherwise.
-    #
-    # Pseudocode:
-    #
-    # 1:  K' = { k : z_k < z_max }                     # skip max-range beams
-    # 2:  theta_k = theta_pose + theta_beam_k          # absolute beam direction
-    # 3:  x_end = x + z_k·cos(theta_k)                 # eq. 6.33, endpoint in
-    # 4:  y_end = y + z_k·sin(theta_k)                 #   the map frame
-    # 5:  dist² = world.obstacle_distance(x_end, y_end)²
-    #                                        # nearest-obstacle lookup, line 7
-    # 6:  p_k = z_hit·prob_normal(dist², sigma²) + z_rand / z_max
-    #                                        # line 8: Gaussian + uniform mix
-    # 7:  q = exp( Σ_k log(max(p_k, tiny)) )           # product over beams,
-    #                                        #   summed in log space
-    # 8:  return q per pose (a float for a single pose)
+    #                   # skip max-range beams # Max range never hit anyth.
+    K = scan < params.z_max_range
+    angles=beam_angles[K] # Remove meaningless scans but dont remove poses.
+    theta_k = poses[:, 2, None] + angles[None,:]          # absolute beam direction
+    x_end = poses[:,0, None]+ scan[None,K]*np.cos(theta_k)                 # eq. 6.33, endpoint in
+    y_end = poses[:,1, None] + scan[None,K]*np.sin(theta_k)                 #   the map frame
+    dist = world.obstacle_distance(x_end, y_end)                                      # nearest-obstacle lookup, line 7
+    p_k = params.z_hit*prob_normal(np.square(dist), np.square(params.sigma_hit)) + params.z_rand / params.z_max_range
+    q = np.exp( np.sum(np.log(np.maximum(p_k, 1e-12)), axis=1) )           # product over beams,
+                                           #   summed in log space
+    
+    if single: return float(q[0])
+    else: return q
     # ------------------------------------------------------------------
-    raise NotImplementedError("task 3.1: likelihood_field_model (Table 6.3)")
